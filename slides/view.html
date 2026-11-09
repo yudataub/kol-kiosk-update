@@ -22,8 +22,12 @@
     img.src = url(d, n);
     pre(d, n, total || n);
   }
-  var h = location.hash.slice(1).split('/');
-  if (h[0]) show(decodeURIComponent(h[0]), Number(h[1]) || 1, Number(h[2]) || 1);
+  function fromHash() {
+    var h = location.hash.slice(1).split('/');
+    if (h[0]) show(decodeURIComponent(h[0]), Number(h[1]) || 1, Number(h[2]) || 1);
+  }
+  window.addEventListener('hashchange', fromHash);
+  fromHash();
 </script>
 </body>
 </html>
