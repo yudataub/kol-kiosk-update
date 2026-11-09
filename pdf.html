@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>מצגת PDF – הקול החמישי</title>
+<!--
+  מציג PDF כמצגת: עמוד אחד על כל המסך. pdf.html?src=<כתובת ה-PDF>
+  כמו ספרי החומש (book.js), חושף window.KolBook = {n, cur(), go(i), lock(b), locked()} (העמודים מ-0),
+  כך שהקיוסק נועל את הדפדוף ומעביר לעמוד של המורה. ?class=12345 = מצב "מורה מוביל" בלי קיוסק (וגם התצוגה בלוח):
+  עוקב אחרי state/lesson כשהמורה הצמיד את אותו PDF. מודיע ללוח (window.parent) כמה עמודים יש.
+-->
+<style>
+  html, body { margin:0; height:100%; background:#1f2937; color:#fff; font-family:"Segoe UI", Arial, sans-serif; overflow:hidden; }
+  #stage { position:fixed; inset:0 0 56px 0; display:flex; align-items:center; justify-content:center; }
+  #stage canvas { background:#fff; box-shadow:0 4px 24px rgba(0,0,0,.5); max-width:100%; max-height:100%; }
+  #bar { position:fixed; left:0; right:0; bottom:0; height:56px; display:flex; align-items:center; justify-content:center; gap:16px; background:#111827; }
+  #bar button { font-size:22px; min-width:64px; height:42px; border:0; border-radius:10px; background:#1e3a8a; color:#fff; cursor:pointer; }
+  #bar button:disabled { opacity:.35; cursor:default; }
+  #count { font-size:18px; font-weight:700; min-width:120px; text-align:center; }
+  #msg { position:fixed; inset:0 0 56px 0; display:flex; align-items:center; justify-content:center; text-align:center; padding:24px; font-size:22px; line-height:1.6; white-space:pre-line; }
+  #badge { position:fixed; top:10px; left:10px; z-index:9; background:#1e3a8a; color:#fff; border-radius:20px; padding:5px 14px; font-size:15px; box-shadow:0 2px 8px rgba(0,0,0,.35); }
+  .lock #bar button { visibility:hidden; }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<div id="msg">טוען את המצגת…</div>
+<div id="badge" class="hidden"></div>
+<div id="bar">
+  <button id="prev" title="העמוד הקודם">▶</button>
+  <span id="count"></span>
+  <button id="next" title="העמוד הבא">◀</button>
+</div>
+<script type="module">
+import * as pdfjs from "./pdfjs/pdf.min.mjs";
+pdfjs.GlobalWorkerOptions.workerSrc = new URL("./pdfjs/pdf.worker.min.mjs", import.meta.url).href;
+
+const $ = id => document.getElementById(id);
+const params = new URLSearchParams(location.search);
+const src = params.get("src") || "";
+const cls = (params.get("class") || "").match(/^\d{5}$/) ? params.get("class") : "";
+let doc = null, cur = 0, locked = false, rendering = 0, want = 0;
+
+const K = window.KolBook = {
+  n: 0,
+  cur: () => cur,
+  go: i => go(i),
+  lock: on => { locked = !!on; document.body.classList.toggle("lock", locked); },
+  locked: () => locked
+};
+
+function msg(t) { $("msg").textContent = t; $("msg").classList.toggle("hidden", !t); }
+function badge(t) { $("badge").textContent = t || ""; $("badge").classList.toggle("hidden", !t); }
+function tell() { try { parent !== window && parent.postMessage({ kolPdf: { n: K.n, cur } }, "*"); } catch (e) {} }
+
+function go(i) {
+  i = Math.max(0, Math.round(+i || 0));
+  if (!doc) { want = cur = i; return; }   // הקובץ עוד נטען: עוברים לעמוד הזה כשהוא מוכן
+  i = Math.min(K.n - 1, i);
+  cur = i;
+  $("count").textContent = K.n ? `עמוד ${i + 1} מתוך ${K.n}` : "";
+  $("prev").disabled = i <= 0;
+  $("next").disabled = !K.n || i >= K.n - 1;
+  tell();
+  render(i);
+}
+
+// מצייר את העמוד בגודל המסך (חד גם במסך צפוף). ציור שהתחיל לפני דפדוף נוסף לא מוצג.
+async function render(i) {
+  want = i;
+  const id = ++rendering;
+  const page = await doc.getPage(i + 1);
+  if (id !== rendering) return;
+  const box = $("stage").getBoundingClientRect();
+  const v1 = page.getViewport({ scale: 1 });
+  const scale = Math.min(box.width / v1.width, box.height / v1.height) || 1;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const vp = page.getViewport({ scale: scale * dpr });
+  const c = document.createElement("canvas");
+  c.width = Math.floor(vp.width); c.height = Math.floor(vp.height);
+  c.style.width = Math.floor(vp.width / dpr) + "px"; c.style.height = Math.floor(vp.height / dpr) + "px";
+  await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
+  if (id !== rendering) return;
+  $("stage").replaceChildren(c);
+  msg("");
+  if (i + 1 < K.n) doc.getPage(i + 2).catch(() => {});   // העמוד הבא מוכן מראש
+}
+
+const step = d => { if (!locked) go(cur + d); };
+$("next").onclick = () => step(1);
+$("prev").onclick = () => step(-1);
+document.addEventListener("keydown", e => {
+  if (["ArrowLeft", "PageDown", " "].includes(e.key)) { e.preventDefault(); step(1); }
+  if (["ArrowRight", "PageUp"].includes(e.key)) { e.preventDefault(); step(-1); }
+});
+let tx = null;
+document.addEventListener("touchstart", e => { tx = e.touches[0].clientX; }, { passive: true });
+document.addEventListener("touchend", e => {
+  if (tx === null) return;
+  const dx = e.changedTouches[0].clientX - tx; tx = null;
+  if (Math.abs(dx) > 50) step(dx > 0 ? 1 : -1);   // מימין לשמאל: החלקה ימינה = העמוד הבא
+});
+let rt = 0;
+addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => doc && render(cur), 150); });
+
+// רק PDF מאתרי הקול החמישי (ומהאתרים שמגישים את הקבצים שלו).
+function srcOk(u) {
+  try {
+    const x = new URL(u);
+    return x.protocol === "https:" && /(^|\.)kol-toda\.co\.il$|^yudataub\.github\.io$/i.test(x.hostname);
+  } catch (e) { return false; }
+}
+
+async function load() {
+  if (!srcOk(src)) { msg("⚠ אפשר להציג רק קובץ PDF מאתר הקול החמישי."); return; }
+  try {
+    doc = await pdfjs.getDocument({
+      url: src,
+      cMapUrl: "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/cmaps/", cMapPacked: true,
+      standardFontDataUrl: "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/standard_fonts/"
+    }).promise;
+  } catch (e) {
+    msg("⚠ לא הצלחנו לפתוח את הקובץ.\n" + (e && e.message || ""));
+    return;
+  }
+  K.n = doc.numPages;
+  try { document.title = decodeURIComponent(new URL(src).pathname.split("/").pop()).replace(/\.pdf$/i, "") + " – הקול החמישי"; } catch (e) {}
+  go(Math.min(want, K.n - 1));
+}
+
+// מצב "מורה מוביל" בלי קיוסק: עוקבים אחרי הדף שהמורה הצמיד, אם זה אותו PDF.
+if (cls && window.EventSource) {
+  const DB = `https://kol-kiosk-class-default-rtdb.europe-west1.firebasedatabase.app/classes/${cls}/state/lesson.json`;
+  const srcOf = u => { try { return new URL(u, location.href).searchParams.get("src") || ""; } catch (e) { return ""; } };
+  const apply = L => {
+    if (L && L.mode === "page" && srcOf(L.url || "") === src) {
+      const pg = +L.pg || 0;
+      K.lock(!L.free);
+      badge(L.free ? "👨‍🏫 המורה פתח דפדוף חופשי" : "👨‍🏫 המורה מדפדף");
+      if (pg !== cur) go(pg);
+    } else { K.lock(true); if (cur !== 0) go(0); badge("⏳ ממתינים למורה…"); }
+  };
+  const fetchLesson = () => fetch(DB, { cache: "no-store" }).then(r => r.json()).then(apply).catch(() => {});
+  K.lock(true); badge("⏳ מתחברים לכיתה…");
+  const es = new EventSource(DB);
+  es.addEventListener("put", fetchLesson); es.addEventListener("patch", fetchLesson);
+  es.onerror = () => badge("⚠️ אין חיבור לכיתה – מנסים שוב…");
+}
+
+load();
+</script>
+</body>
+</html>
